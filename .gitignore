@@ -1,6 +1,5 @@
 venv/
 .venv/
-.env
 __pycache__/
 *.py[cod]
 .tools/
@@ -10,3 +9,5 @@ data/db/*.json
 data/enrollments/
 .pytest_cache/
 models/embedder_arcface.onnx
+config.bat
+node_modules
