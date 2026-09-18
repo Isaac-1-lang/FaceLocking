@@ -2,7 +2,7 @@
 import csv
 from pathlib import Path
 import cv2
-from .alignment import align_face
+from .align import align_face
 from .database import FaceDatabase
 from .workflow import models, parser, run
 

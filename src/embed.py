@@ -55,7 +55,7 @@ class ArcFace:
 
 
 def main():
-    from .alignment import align_face
+    from .align import align_face
     from .workflow import camera, exiting, models, parser, read_frame
     args = parser("Preview ArcFace embedding shape and L2 norm").parse_args()
     detector, embedder = models(args)

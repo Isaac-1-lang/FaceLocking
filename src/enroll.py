@@ -1,7 +1,7 @@
 """Enroll one consenting person from a webcam; SPACE captures a sample."""
 import time
 import cv2
-from .alignment import align_face
+from .align import align_face
 from .database import FaceDatabase
 from .landmarks import draw_face
 from .workflow import camera, exiting, models, parser, read_frame, run

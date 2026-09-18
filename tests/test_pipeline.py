@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 import numpy as np
-from src.alignment import TEMPLATE, align_face, similarity_transform
+from src.align import TEMPLATE, align_face, similarity_transform
 from src.database import FaceDatabase
 from src.embed import normalize
 
