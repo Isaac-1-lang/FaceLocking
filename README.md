@@ -69,6 +69,30 @@ The window displays face boxes, five landmark dots, names, cosine similarity, an
 
 The best match must meet `--threshold` and exceed the runner-up by `--margin`; otherwise the result is `Unknown`. Higher thresholds accept fewer matches. Scores are similarities, not confidence percentages. The defaults are starting values, not calibrated accuracy guarantees. This implementation processes current frames without temporal identity tracking, so labels may flicker under poor lighting or motion.
 
+## Lock and track one enrolled person
+
+```sh
+python -m src.face_tracking --target "Isaac"
+```
+
+Use the exact enrolled name. This reuses the same YuNet detection, five-point
+alignment, ArcFace model, JSON database, and similarity threshold/margin as
+`src.recognize`. Unknown faces and other enrolled names cannot acquire the lock.
+Only the target gets a box; the window shows `SEARCHING`, `LOCKED`, or `LOST`,
+plus the smoothed face position and normalized horizontal/vertical errors.
+There is no current box or position output while the target is missing.
+After more than 24 missed frames, it clears the old geometry and searches for
+the same identity again. Q, Escape, or closing the window exits.
+
+Identity is checked every frame by default. `--verify-every 10` uses the PDF's
+lighter periodic verification, but can briefly follow an unverified face between
+checks. Reappearance after a gap and scenes with multiple eligible faces always
+trigger verification. `--lost-timeout`, `--ema-alpha`, and `--dead-zone` control
+the grace period, position smoothing, and centered region. Existing `--camera`,
+`--db`, `--model`, `--detector`, `--preprocessing`, `--threshold`, and `--margin`
+options are supported. This command implements identity locking and position;
+smile/blink detection is not enabled.
+
 ## Inspect individual stages
 
 ```sh
