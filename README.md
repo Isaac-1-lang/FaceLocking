@@ -39,8 +39,8 @@ Default preprocessing is **RGB float32, NCHW, 0-255** (`--preprocessing raw`) fo
 ## Enroll a person
 
 ```sh
-python -m src.enroll --name "Alice" --samples 8
-python -m src.enroll --name "Bob" --camera 1
+python -m src.enroll --name "Belise" --samples 8
+python -m src.enroll --name "Isaac" --camera 1
 ```
 
 1. Keep exactly one person in view, with their whole face visible and good front lighting.
@@ -52,7 +52,7 @@ The default is eight captures, at least half a second apart. Faces must be at le
 To deliberately redo an existing identity:
 
 ```sh
-python -m src.enroll --name "Alice" --replace
+python -m src.enroll --name "Belise" --replace
 ```
 
 Names are case-sensitive; `Unknown` and `Too small` are reserved. Embeddings are stored in `data/db/face_db.json`; raw photos and camera recordings are not saved. Each identity retains its normalized samples; matching uses their normalized mean. Writes replace the JSON file atomically. Run one enrollment process at a time. Restart recognition after adding or replacing identities.
@@ -132,8 +132,8 @@ Collect fresh images in the expected camera conditions, including enrolled peopl
 
 ```csv
 path,label
-validation/alice_01.jpg,Alice
-validation/bob_01.jpg,Bob
+validation/belise_01.jpg,belise
+validation/isaac_01.jpg,isaac
 validation/visitor_01.jpg,Unknown
 ```
 
