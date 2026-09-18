@@ -1,7 +1,8 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+from contextlib import nullcontext
 
 import numpy as np
 
@@ -9,6 +10,8 @@ from src.align import TEMPLATE
 from src.database import FaceDatabase
 from src.face_tracking import LockedFaceTracker, LockState
 from src.landmarks import Face
+from src.face_signals import FaceSignals
+from src import face_tracking
 
 
 class TrackingTests(unittest.TestCase):
@@ -117,6 +120,31 @@ class TrackingTests(unittest.TestCase):
             kwargs.update(options)
             with self.assertRaises(ValueError):
                 LockedFaceTracker(**kwargs)
+
+    def test_live_loop_counts_blink_and_clears_readings_after_loss(self):
+        self.detector.detect.side_effect = [[self.face], []]
+        extractor = Mock()
+        extractor.analyze.return_value = FaceSignals(.286, True, False, .412, True)
+        cap = Mock()
+        cap.read.side_effect = [(True, self.frame.copy()), (True, self.frame.copy())]
+        with patch('sys.argv', ['tracking', '--target', 'Isaac']), \
+                patch.object(face_tracking, 'models', return_value=(self.detector, self.embedder)), \
+                patch.object(face_tracking, 'FaceDatabase', return_value=self.db), \
+                patch.object(face_tracking, 'FaceSignalExtractor', return_value=extractor), \
+                patch.object(face_tracking, 'camera', return_value=nullcontext(cap)), \
+                patch.object(face_tracking.cv2, 'imshow') as show, \
+                patch.object(face_tracking.cv2, 'waitKey', return_value=0), \
+                patch.object(face_tracking, 'exiting', side_effect=[False, True]), \
+                patch.object(face_tracking, 'status_panel', wraps=face_tracking.status_panel) as panel:
+            face_tracking.main()
+        first, second = panel.call_args_list
+        self.assertEqual(first.args[4], 1)
+        self.assertEqual(second.args[4], 1)
+        self.assertIsNone(second.args[2])
+        self.assertIsNone(second.args[3])
+        self.assertGreater(show.call_args.args[1].shape[1], self.frame.shape[1])
+        extractor.reset.assert_called_once()
+        extractor.close.assert_called_once()
 
 
 if __name__ == '__main__':

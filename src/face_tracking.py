@@ -1,12 +1,14 @@
 """Lock one enrolled identity using the existing Part 1 recognition pipeline."""
 from dataclasses import dataclass
 from enum import Enum, auto
+from contextlib import closing
 
 import cv2
 import numpy as np
 
 from src.align import align_face
 from src.database import FaceDatabase
+from src.face_signals import FaceSignalExtractor
 from src.landmarks import draw_face
 from src.workflow import camera, exiting, models, parser, read_frame, run
 
@@ -140,6 +142,41 @@ class LockedFaceTracker:
         return TrackingSignal(ex, ey, horizontal, vertical)
 
 
+def status_panel(frame, tracker, position, signals, blink_total, settings):
+    """Keep live readings and calibration settings visible beside the camera."""
+    lines = [f'{tracker.state.name}: {tracker.target_name}',
+             f'{position.horizontal} / {position.vertical}' if position else 'Position: N/A',
+             f'error=({position.error_x:+.2f}, {position.error_y:+.2f})' if position else 'error: N/A',
+             '',
+             ('SMILE' if signals.smiling else 'NEUTRAL') if signals else 'Smile: N/A',
+             (('EYES CLOSED' if signals.eyes_closed else 'EYES CLOSING')
+              if signals.ear < settings.ear_threshold else 'EYES OPEN') if signals else 'Eyes: N/A',
+             f'BLINKS: {blink_total}',
+             f'EAR: {signals.ear:.3f}' if signals else 'EAR: N/A',
+             f'Smile score: {signals.smile_score:.3f}' if signals else 'Smile score: N/A',
+             '', 'CALIBRATION',
+             f'EAR threshold: {settings.ear_threshold:g}',
+             f'Blink frames: {settings.blink_min_frames}-{settings.blink_max_frames}',
+             f'Closed frames: {settings.closed_frames}',
+             f'Smile on/off: {settings.smile_on:g} / {settings.smile_off:g}',
+             f'Match threshold/margin: {tracker.threshold:g} / {tracker.margin:g}',
+             f'Verify every: {tracker.verify_every} frame(s)',
+             f'Lost timeout: {tracker.lost_timeout} frames',
+             f'EMA: {tracker.ema_alpha:g} | Dead zone: {tracker.dead_zone:g}',
+             '', 'Q / Escape: quit']
+    panel_width = 390
+    view = np.full((max(frame.shape[0], len(lines) * 27 + 20),
+                    frame.shape[1] + panel_width, 3), 24, dtype=np.uint8)
+    view[:frame.shape[0], :frame.shape[1]] = frame
+    for index, text in enumerate(lines):
+        color = (0, 220, 160) if index == 0 else (230, 230, 230)
+        scale = min(0.55, (panel_width - 24) / max(
+            cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1, 1)[0][0], 1))
+        cv2.putText(view, text, (frame.shape[1] + 12, 27 * (index + 1)),
+                    cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA)
+    return view
+
+
 def main():
     cli = parser(__doc__)
     cli.add_argument('--target', required=True, help='Exact enrolled name to lock')
@@ -150,6 +187,12 @@ def main():
     cli.add_argument('--lost-timeout', type=int, default=24, help='Missed frames allowed before searching again')
     cli.add_argument('--ema-alpha', type=float, default=0.30)
     cli.add_argument('--dead-zone', type=float, default=0.07)
+    cli.add_argument('--ear-threshold', type=float, default=0.21)
+    cli.add_argument('--blink-min-frames', type=int, default=2)
+    cli.add_argument('--blink-max-frames', type=int, default=7)
+    cli.add_argument('--closed-frames', type=int, default=8)
+    cli.add_argument('--smile-on', type=float, default=0.38)
+    cli.add_argument('--smile-off', type=float, default=0.35)
     args = cli.parse_args()
     detector, embedder = models(args)
     db = FaceDatabase(args.db, embedder.signature)
@@ -160,28 +203,33 @@ def main():
                                 args.dead_zone, args.threshold, args.margin)
     window = 'FaceX identity lock'
     print(f'Tracking {args.target!r}. Q or Escape quits. Scores use Part 1 cosine matching.')
-    with camera(args.camera) as cap:
+    blink_total = 0
+    with closing(FaceSignalExtractor(
+            ear_threshold=args.ear_threshold, blink_min_frames=args.blink_min_frames,
+            blink_max_frames=args.blink_max_frames, closed_frames=args.closed_frames,
+            smile_on=args.smile_on, smile_off=args.smile_off)) as extractor, camera(args.camera) as cap:
         while True:
             frame = read_frame(cap)
             face, position = tracker.update(frame)
+            face_state = None
+            if face is not None:
+                face_state = extractor.analyze(frame, tracker.box(face))
+                if face_state is not None and face_state.blink:
+                    blink_total += 1
+            else:
+                extractor.reset()
             # All inference uses the original pixels before overlays are drawn.
             color = (0, 200, 0) if face is not None else (0, 140, 255)
             if face is not None:
                 draw_face(frame, face, f'{args.target} | LOCKED', color)
                 cx, cy = np.rint(tracker.smooth_center).astype(int)
                 cv2.circle(frame, (cx, cy), 5, (255, 170, 0), -1)
-                text = (f'{position.horizontal} / {position.vertical} '
-                        f'error=({position.error_x:+.2f}, {position.error_y:+.2f})')
-                cv2.putText(frame, text, (12, 56), cv2.FONT_HERSHEY_SIMPLEX,
-                            0.55, (255, 170, 0), 2)
-            cv2.putText(frame, f'{tracker.state.name}: {args.target} | Q: quit',
-                        (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2)
             height, width = frame.shape[:2]
             dz = tracker.dead_zone
             cv2.rectangle(frame, (int(width * (0.5 - dz / 2)), int(height * (0.5 - dz / 2))),
                           (int(width * (0.5 + dz / 2)), int(height * (0.5 + dz / 2))),
                           (120, 120, 120), 1)
-            cv2.imshow(window, frame)
+            cv2.imshow(window, status_panel(frame, tracker, position, face_state, blink_total, args))
             if exiting(window, cv2.waitKey(1) & 0xff):
                 break
 

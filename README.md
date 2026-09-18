@@ -19,7 +19,7 @@ Close each camera window with **Q** before starting the next command. Explicit i
 
 A project-local Python runtime may also be present from development. If `.tools/python/python.exe` exists, use it directly in place of `.venv/Scripts/python.exe`; it does not require activation. `.tools` is ignored by Git and is not part of the portable project.
 
-On Linux/macOS, create the environment with `python3 -m venv .venv`, activate with `source .venv/bin/activate`, then use `python` for the commands below. A graphical desktop and camera permissions are required. Install `opencv-python`, not its headless variant.
+On Linux/macOS, create the environment with `python3 -m venv .venv`, activate with `source .venv/bin/activate`, then use `python` for the commands below. A graphical desktop and camera permissions are required. Install the `opencv-contrib-python` version from requirements.txt, not a headless variant.
 
 ## Model setup
 
@@ -90,8 +90,29 @@ checks. Reappearance after a gap and scenes with multiple eligible faces always
 trigger verification. `--lost-timeout`, `--ema-alpha`, and `--dead-zone` control
 the grace period, position smoothing, and centered region. Existing `--camera`,
 `--db`, `--model`, `--detector`, `--preprocessing`, `--threshold`, and `--margin`
-options are supported. This command implements identity locking and position;
-smile/blink detection is not enabled.
+options are supported. A separate status panel displays position, SMILE/NEUTRAL,
+eye state, session blink count, EAR, smile score, and all tracking/expression
+calibration settings. Missing observations show N/A rather than stale readings.
+Expression analysis runs only on the locked face, before any overlays are drawn.
+
+Install the updated dependencies before running this version. When upgrading an
+older environment, replace its OpenCV package first to avoid two packages owning
+the same `cv2` files:
+
+```sh
+python -m pip uninstall -y opencv-python opencv-python-headless
+python -m pip install --upgrade -r requirements.txt
+python -m pip install --force-reinstall --no-deps opencv-contrib-python==4.11.0.86
+```
+
+The existing FaceMesh extractor uses MediaPipe 0.10.21 and compatible NumPy/OpenCV
+versions pinned in requirements.txt. Tune `--ear-threshold` (0.21),
+`--blink-min-frames` (2), `--blink-max-frames` (7), `--closed-frames` (8),
+`--smile-on` (0.38), and `--smile-off` (0.35) using the displayed readings.
+Blink duration is measured in processed frames, so tune for your actual frame rate.
+Short low-EAR periods display EYES CLOSING; sustained closure displays EYES CLOSED.
+Blink counts increment once upon reopening after 2-7 low-EAR frames. Missing
+landmarks or a lost target reset pending expression state, retaining the session count.
 
 ## Inspect individual stages
 
@@ -169,7 +190,7 @@ Development validation: all 10 tests passed with Python 3.12.10, NumPy 2.5.3, Op
 | `No Python at ...` | Recreate `.venv` using an installed Python; the original environment is not portable. |
 | Missing/empty model | Run `python init_project.py --download-models`. A zero-byte file or Git LFS pointer is not a model. |
 | Camera cannot open | Close Teams/Zoom/other camera programs, enable desktop camera permissions, or try `--camera 1`. |
-| No window / GUI error | Run in a desktop session and install `opencv-python`; remove conflicting headless OpenCV packages. |
+| No window / GUI error | Run in a desktop session and install `opencv-contrib-python` from requirements.txt; remove conflicting OpenCV packages. |
 | Everything is Unknown | Inspect landmarks/alignment, verify preprocessing, improve lighting, and re-enroll before lowering the threshold. |
 | Wrong people accepted | Increase the threshold/margin and evaluate with held-out unknown people. |
 | Model mismatch | Use the original model/settings or enroll again into a separate `--db` file. |

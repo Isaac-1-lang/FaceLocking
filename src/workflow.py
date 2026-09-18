@@ -47,9 +47,14 @@ def exiting(window, key):
 
 
 def run(main):
+    opencv_errors = (cv2.error,) if hasattr(cv2, 'error') else ()
     try:
+        if not all(hasattr(cv2, name) for name in ('error', 'FaceDetectorYN', 'VideoCapture')):
+            raise RuntimeError(
+                'OpenCV installation is incomplete. Run: python -m pip install '
+                '--force-reinstall --no-deps opencv-contrib-python==4.11.0.86')
         main()
-    except (ValueError, RuntimeError, OSError, cv2.error) as error:
+    except (ValueError, RuntimeError, OSError) + opencv_errors as error:
         raise SystemExit(f"FaceX: {error}") from error
     except KeyboardInterrupt:
         print("\nStopped.")

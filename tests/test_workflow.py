@@ -1,10 +1,16 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 import numpy as np
-from src.workflow import camera, read_frame
+from src.workflow import camera, read_frame, run
 
 
 class CameraTests(unittest.TestCase):
+    def test_incomplete_opencv_reports_reinstall_instead_of_second_traceback(self):
+        with patch('src.workflow.cv2', SimpleNamespace()):
+            with self.assertRaisesRegex(SystemExit, 'OpenCV installation is incomplete'):
+                run(lambda: self.fail('Must validate OpenCV before starting'))
+
     @patch("src.workflow.cv2.destroyAllWindows")
     @patch("src.workflow.cv2.VideoCapture")
     def test_camera_released_when_processing_raises(self, factory, cleanup):

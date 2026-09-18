@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 
 import cv2
-import mediapipe as mp
 import numpy as np
 
 
@@ -70,6 +69,18 @@ class FaceSignalExtractor:
         smile_on: float = 0.38,
         smile_off: float = 0.35,
     ):
+        if not np.isfinite(ear_threshold) or ear_threshold <= 0:
+            raise ValueError('ear_threshold must be positive and finite')
+        if not (1 <= blink_min_frames <= blink_max_frames < closed_frames):
+            raise ValueError('Require 1 <= blink_min_frames <= blink_max_frames < closed_frames')
+        if not (0 <= smile_off < smile_on <= 1):
+            raise ValueError('Require 0 <= smile_off < smile_on <= 1')
+        try:
+            import mediapipe as mp
+        except ImportError as error:
+            raise RuntimeError('Face signals require MediaPipe. Run python -m pip install -r requirements.txt') from error
+        if not hasattr(mp, 'solutions'):
+            raise RuntimeError('Face signals require mediapipe==0.10.21; install requirements.txt')
         self.ear_threshold = ear_threshold
 
         self.blink_min_frames = blink_min_frames
@@ -114,7 +125,7 @@ class FaceSignalExtractor:
 
         height, width = frame.shape[:2]
 
-        x1, y1, x2, y2 = bbox
+        x1, y1, x2, y2 = np.rint(bbox).astype(int)
 
         box_width = x2 - x1
         box_height = y2 - y1
@@ -150,6 +161,7 @@ class FaceSignalExtractor:
         ]
 
         if roi.size == 0:
+            self.reset()
             return None
 
         rgb_roi = cv2.cvtColor(
@@ -162,6 +174,7 @@ class FaceSignalExtractor:
         )
 
         if not result.multi_face_landmarks:
+            self.reset()
             return None
 
         roi_height, roi_width = roi.shape[:2]
