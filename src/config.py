@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DETECTOR = ROOT / "models" / "detector_yunet.onnx"
 EMBEDDER = ROOT / "models" / "embedder_arcface.onnx"
 DATABASE = ROOT / "data" / "db" / "face_db.json"
+LOGS = ROOT / "data" / "logs"
 
 
 def require_model(path):
