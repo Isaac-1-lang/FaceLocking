@@ -78,7 +78,7 @@ python -m src.face_tracking --target "Isaac"
 Use the exact enrolled name. This reuses the same YuNet detection, five-point
 alignment, ArcFace model, JSON database, and similarity threshold/margin as
 `src.recognize`. Unknown faces and other enrolled names cannot acquire the lock.
-Only the target gets a box; the window shows `SEARCHING`, `LOCKED`, or `LOST`,
+Only the target gets a box; the window shows `SEARCHING`, `LOCKED`, `UNCERTAIN`, or `LOST`,
 plus the smoothed face position and normalized horizontal/vertical errors.
 There is no current box or position output while the target is missing.
 After more than 24 missed frames, it clears the old geometry and searches for
@@ -94,6 +94,48 @@ options are supported. A separate status panel displays position, SMILE/NEUTRAL,
 eye state, session blink count, EAR, smile score, and all tracking/expression
 calibration settings. Missing observations show N/A rather than stale readings.
 Expression analysis runs only on the locked face, before any overlays are drawn.
+
+Brief identity failures on a continuously detected face now retain an orange
+`UNCERTAIN` box for up to five processed frames (`--uncertain-grace 5`). Each
+new box must overlap the previous box by at least 50% IoU. Identity is checked
+every frame during uncertainty; a successful target match restores `LOCKED`.
+A different recognized identity, multiple eligible faces, invalid face alignment,
+or an exhausted grace period drops the lock immediately. Missing detections
+still hide the box and position; reacquisition after a gap requires a target match.
+Use `--uncertain-grace 0` for the previous strict behavior. Grace can briefly
+follow an unknown person occupying the same location; it is continuity evidence,
+not identity confirmation. It cannot recover details absent in a dark camera image.
+
+The panel shows the tracking reason, current detection confidence, and best
+database match similarity (not necessarily the target's score). `Unknown` means
+the match failed the threshold or margin. `N/A` means no valid score was obtained
+on that frame, including frames between scheduled identity checks. Detection
+confidence is shown only for eligible detections; no eligible face can also mean
+the face is smaller than the 70-pixel minimum. These readings help distinguish
+detection failures from identity matching failures when lighting changes.
+
+### Tracking logs
+
+Every tracking run automatically creates a unique CSV file under `data/logs/`
+and prints its path. Use `--log-dir path/to/logs` to choose another directory.
+Files have exactly three columns: `Timestamp`, `Action Type`, and `Description`.
+Timestamps use UTC with an explicit timezone and millisecond precision.
+
+Actions are `SESSION_START`, `TRACKING_SEARCHING`, `TRACKING_LOCKED`,
+`TRACKING_UNCERTAIN`, `TRACKING_LOST`, `ERROR`, and `SESSION_END`. One tracking
+row is saved per processed frame. Its JSON description contains the frame
+number, target, tracking reason, detection confidence, match name and score,
+position/direction, smile status and score, eye state, EAR, blink event, and
+session blink count. Unavailable readings are `null`. The start record contains
+the command settings; the end record distinguishes normal exit, interruption,
+and error. Startup/runtime exceptions are recorded before being propagated.
+
+Rows are flushed as they are written, and previous sessions are never overwritten.
+Logs accumulate until manually archived or removed; recording every frame can
+produce large files on long runs. Forced process termination may omit the final
+session record. A log write failure stops the run with an error. The default log
+directory is ignored by Git. Logs contain readings and names, not images or
+face embeddings.
 
 Install the updated dependencies before running this version. When upgrading an
 older environment, replace its OpenCV package first to avoid two packages owning

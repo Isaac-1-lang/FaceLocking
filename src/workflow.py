@@ -19,7 +19,7 @@ def parser(description):
 
 def models(args):
     return FaceDetector(args.detector), ArcFace(args.model, args.preprocessing)
-
+    
 
 @contextmanager
 def camera(index):

@@ -1,3 +1,5 @@
+import csv
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -111,10 +113,72 @@ class TrackingTests(unittest.TestCase):
         self.assertIsNotNone(self.tracker.update(self.frame)[0])
         self.assertEqual(self.tracker.update(self.frame), (None, None))
 
+    def test_brief_unknown_match_keeps_current_position_then_recovers(self):
+        self.tracker.update(self.frame)
+        self.embedder.embed.return_value = self.unknown
+        self.face.box = np.array([110, 100, 100, 100])
+        face, position = self.tracker.update(self.frame)
+        self.assertIs(face, self.face)
+        self.assertEqual(self.tracker.state.name, 'UNCERTAIN')
+        self.assertAlmostEqual(position.error_x, -0.235)
+        self.embedder.embed.return_value = self.target
+        self.tracker.update(self.frame)
+        self.assertEqual(self.tracker.state, LockState.LOCKED)
+        self.assertEqual(self.tracker.uncertain_frames, 0)
+
+    def test_unknown_grace_expires_and_cannot_restart_without_identity(self):
+        self.tracker.uncertain_grace = 2
+        self.tracker.verify_every = 10
+        self.tracker.update(self.frame)
+        self.tracker.frame_index = 9
+        self.embedder.embed.return_value = self.unknown
+        for _ in range(2):
+            self.assertIsNotNone(self.tracker.update(self.frame)[0])
+            self.assertEqual(self.tracker.state.name, 'UNCERTAIN')
+        for _ in range(5):
+            self.assertEqual(self.tracker.update(self.frame), (None, None))
+
+    def test_unknown_cannot_bridge_gap_crossing_or_large_jump(self):
+        for scenario in ('gap', 'crossing', 'jump', 'invalid'):
+            with self.subTest(scenario=scenario):
+                self.setUp()
+                self.tracker.update(self.frame)
+                self.embedder.embed.return_value = self.unknown
+                if scenario == 'gap':
+                    self.detector.detect.return_value = []
+                    self.tracker.update(self.frame)
+                    self.detector.detect.return_value = [self.face]
+                elif scenario == 'crossing':
+                    self.detector.detect.return_value = [self.face, self.face]
+                elif scenario == 'jump':
+                    self.face.box = np.array([180, 100, 100, 100])
+                else:
+                    self.face.points[:] = 0
+                self.assertEqual(self.tracker.update(self.frame), (None, None))
+
+    def test_zero_grace_preserves_strict_identity_checks(self):
+        self.tracker.uncertain_grace = 0
+        self.tracker.update(self.frame)
+        self.embedder.embed.return_value = self.unknown
+        self.assertEqual(self.tracker.update(self.frame), (None, None))
+
+    def test_diagnostics_show_rejected_match_and_clear_after_missing_detection(self):
+        self.tracker.update(self.frame)
+        self.embedder.embed.return_value = self.other
+        self.tracker.update(self.frame)
+        self.assertAlmostEqual(self.tracker.detection_confidence, .99)
+        self.assertEqual(self.tracker.match_name, 'Alice')
+        self.assertAlmostEqual(self.tracker.match_score, 1.0)
+        self.detector.detect.return_value = []
+        self.tracker.update(self.frame)
+        self.assertIsNone(self.tracker.detection_confidence)
+        self.assertIsNone(self.tracker.match_score)
+
     def test_unknown_target_and_invalid_options_rejected(self):
         for options in ({'target_name': 'Nobody'}, {'verify_every': 0},
                         {'lost_timeout': -1}, {'ema_alpha': 0},
-                        {'dead_zone': 2}, {'threshold': float('nan')}):
+                        {'dead_zone': 2}, {'threshold': float('nan')},
+                        {'uncertain_grace': -1}, {'uncertain_grace': 1.5}):
             kwargs = dict(target_name='Isaac', detector=self.detector,
                           embedder=self.embedder, matcher=self.db)
             kwargs.update(options)
@@ -128,6 +192,7 @@ class TrackingTests(unittest.TestCase):
         cap = Mock()
         cap.read.side_effect = [(True, self.frame.copy()), (True, self.frame.copy())]
         with patch('sys.argv', ['tracking', '--target', 'Isaac']), \
+                patch.object(face_tracking, 'LOGS', self.db.path.parent / 'logs'), \
                 patch.object(face_tracking, 'models', return_value=(self.detector, self.embedder)), \
                 patch.object(face_tracking, 'FaceDatabase', return_value=self.db), \
                 patch.object(face_tracking, 'FaceSignalExtractor', return_value=extractor), \
@@ -145,6 +210,27 @@ class TrackingTests(unittest.TestCase):
         self.assertGreater(show.call_args.args[1].shape[1], self.frame.shape[1])
         extractor.reset.assert_called_once()
         extractor.close.assert_called_once()
+        paths = list((self.db.path.parent / 'logs').glob('*.csv'))
+        self.assertEqual(len(paths), 1)
+        with paths[0].open(newline='', encoding='utf-8') as stream:
+            rows = list(csv.DictReader(stream))
+        self.assertEqual([row['Action Type'] for row in rows],
+                         ['SESSION_START', 'TRACKING_LOCKED', 'TRACKING_LOST', 'SESSION_END'])
+        self.assertTrue(json.loads(rows[1]['Description'])['signals']['blink'])
+        self.assertIsNone(json.loads(rows[2]['Description'])['signals'])
+
+    def test_startup_failure_is_logged_before_propagation(self):
+        with patch('sys.argv', ['tracking', '--target', 'Isaac']), \
+                patch.object(face_tracking, 'LOGS', self.db.path.parent / 'logs'), \
+                patch.object(face_tracking, 'models', side_effect=RuntimeError('Missing model')):
+            with self.assertRaisesRegex(RuntimeError, 'Missing model'):
+                face_tracking.main()
+        path = next((self.db.path.parent / 'logs').glob('*.csv'))
+        with path.open(newline='', encoding='utf-8') as stream:
+            rows = list(csv.DictReader(stream))
+        self.assertEqual([row['Action Type'] for row in rows],
+                         ['SESSION_START', 'ERROR', 'SESSION_END'])
+        self.assertIn('Missing model', rows[1]['Description'])
 
 
 if __name__ == '__main__':
