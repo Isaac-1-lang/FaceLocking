@@ -292,12 +292,13 @@ def tracking_session(args, cli, log):
             if face is not None:
                 draw_face(frame, face, f'{args.target} | {tracker.state.name}', color)
                 cx, cy = np.rint(tracker.smooth_center).astype(int)
-                cv2.circle(frame, (cx, cy), 5, (255, 170, 0), -1)
+                cv2.circle(frame, (cx, cy), 6, (28, 32, 38), -1, cv2.LINE_AA)
+                cv2.circle(frame, (cx, cy), 4, (255, 170, 0), -1, cv2.LINE_AA)
             height, width = frame.shape[:2]
             dz = tracker.dead_zone
             cv2.rectangle(frame, (int(width * (0.5 - dz / 2)), int(height * (0.5 - dz / 2))),
                           (int(width * (0.5 + dz / 2)), int(height * (0.5 + dz / 2))),
-                          (120, 120, 120), 1)
+                          (160, 160, 160), 1, cv2.LINE_AA)
             cv2.imshow(window, status_panel(frame, tracker, position, face_state, blink_total, args))
             if exiting(window, cv2.waitKey(1) & 0xff):
                 break
