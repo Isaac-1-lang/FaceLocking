@@ -1,7 +1,7 @@
 """Lock one enrolled identity using the existing Part 1 recognition pipeline."""
 from dataclasses import dataclass
 from enum import Enum, auto
-from contextlib import closing
+from contextlib import closing, nullcontext
 
 import cv2
 import numpy as np
@@ -255,6 +255,10 @@ def main():
     cli.add_argument('--closed-frames', type=int, default=8)
     cli.add_argument('--smile-on', type=float, default=0.38)
     cli.add_argument('--smile-off', type=float, default=0.35)
+    cli.add_argument('--mqtt-host', default=None,
+                     help='Broker address for the ESP32 needle display; omit to disable publishing')
+    cli.add_argument('--mqtt-port', type=int, default=1883)
+    cli.add_argument('--mqtt-topic', default='facex/tracking')
     args = cli.parse_args()
     with TrackingLog(args.log_dir, vars(args)) as log:
         print(f'Session log: {log.path}')
@@ -272,10 +276,16 @@ def tracking_session(args, cli, log):
     window = 'FaceX identity lock'
     print(f'Tracking {args.target!r}. Q or Escape quits. Scores use Part 1 cosine matching.')
     blink_total = 0
+    needle = None
+    if args.mqtt_host:
+        from src.mqtt_bridge import NeedlePublisher
+        needle = NeedlePublisher(args.mqtt_host, args.mqtt_port, args.mqtt_topic)
+        print(f'Publishing tracking signal to mqtt://{args.mqtt_host}:{args.mqtt_port}/{args.mqtt_topic}')
     with closing(FaceSignalExtractor(
             ear_threshold=args.ear_threshold, blink_min_frames=args.blink_min_frames,
             blink_max_frames=args.blink_max_frames, closed_frames=args.closed_frames,
-            smile_on=args.smile_on, smile_off=args.smile_off)) as extractor, camera(args.camera) as cap:
+            smile_on=args.smile_on, smile_off=args.smile_off)) as extractor, camera(args.camera) as cap, \
+            closing(needle) if needle is not None else nullcontext():
         while True:
             frame = read_frame(cap)
             face, position = tracker.update(frame)
@@ -286,6 +296,8 @@ def tracking_session(args, cli, log):
                     blink_total += 1
             else:
                 extractor.reset()
+            if needle is not None:
+                needle.publish(tracker, position)
             log.frame(tracker, position, face_state, blink_total, args.ear_threshold)
             # All inference uses the original pixels before overlays are drawn.
             color = (0, 200, 0) if tracker.state == LockState.LOCKED else (0, 140, 255)
