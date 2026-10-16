@@ -156,6 +156,104 @@ Short low-EAR periods display EYES CLOSING; sustained closure displays EYES CLOS
 Blink counts increment once upon reopening after 2-7 low-EAR frames. Missing
 landmarks or a lost target reset pending expression state, retaining the session count.
 
+## Whole-person tracking that survives face loss (Part 3)
+
+`src/person_tracking/` keeps following the enrolled target when the face is not
+visible (head turn, occlusion, someone walking in front) and says honestly how
+much it still knows. It is CPU-only, reuses the Part 1/2 YuNet, ArcFace, aligner
+and JSON gallery, and does not modify them.
+
+```sh
+python -m src.person_tracking --target "Isaac"                    # webcam
+python -m src.person_tracking --target "Isaac" --video clip.mp4 --no-display
+python -m src.person_tracking.sim --list                           # no camera, no models needed
+python -m src.person_tracking.sim --scenario path_crossing --show
+python -m src.person_tracking.sim.evaluate --seeds 5               # scores vs ground truth
+python -m src.person_tracking.benchmark                            # per-stage CPU timings
+```
+
+### The three states
+
+| State | Meaning | How it is reached |
+| --- | --- | --- |
+| `CONFIRMED` | A face matched the target recently enough to still be trusted | Positive face evidence only |
+| `TEMPORARY` | Was confirmed, face no longer seen; body followed by motion/appearance while confidence decays | Only from `CONFIRMED`, by decay |
+| `UNKNOWN` | No trustworthy claim (never confirmed, ruled out, or decayed away): **no centring command is produced** | Decay below `--unknown`, a different person's face, or a suspected swap |
+
+Confidence follows `c(t) = c0 * 0.5^(t / half_life)` between face observations
+(`--half-life`, default 3 s), measured in seconds so it is frame-rate independent. Decay is
+faster while the person is crossing another one (x2.5), coasting undetected (x1.5), or
+predicted to have left the image (x4). Hysteresis (`--confirm` 0.70, drop 0.50, `--unknown` 0.20)
+prevents flicker. A body match, however good, never raises confidence; only a face match does.
+A just-passing match (similarity near the 0.45 threshold) cannot confirm alone: a single match
+confirms only from about 0.57 similarity, otherwise two agreeing matches are needed. A face of a
+different enrolled person removes the lock after two strikes. Only one track can hold the target.
+
+### Pipeline
+
+1. **Detect**: YuNet faces (on a frame at most `--detect-width` 640 px wide) and a body detector
+   every `--detect-every` frames (`--person-backend hog` = OpenCV HOG, no download; `yolo` = any
+   YOLOv5/v8 person ONNX via `--person-model`, e.g. a 320-pixel export for speed; `none` = bodies are
+   derived from faces). On skipped frames the Kalman filter carries the boxes.
+2. **Track bodies**: constant-velocity Kalman filter per person (size-scaled noise, damped coasting,
+   robust to outliers), Hungarian assignment (no SciPy), colour signature as a soft association cue.
+   Truncated boxes from occluders are completed rather than trusted, which avoids biasing the velocity.
+3. **Map faces to bodies**: a Gaussian head-region prior plus face/body size plausibility,
+   solved globally; faces that fit two overlapping bodies are flagged ambiguous and ignored as evidence.
+4. **Verify sparingly**: ArcFace dominates CPU cost, so it runs on at most `--max-verifications` (1)
+   frontal, large enough, unambiguous face per frame, and held targets are re-checked about once a second
+   (about 0.1 calls/frame in the simulator versus 1-3 for a per-frame face lock).
+5. **Crossings**: when two people overlap, both lose confidence faster; after they separate, torso colour
+   recorded *before* the overlap is compared. If a track now looks like its former partner, its identity
+   claim is withdrawn (never transferred); if colours cannot tell them apart, confidence is halved.
+6. **Centre**: face centre when visible, estimated head position on the body otherwise (with a learned
+   offset so the aim does not jump when the face disappears), time-constant smoothing, dead zone,
+   and a gain below 1 while `TEMPORARY`. `UNKNOWN` returns no aim. To drive the ESP needle use
+   `--mqtt-host`; `NeedleAdapter` maps CONFIRMED/TEMPORARY/UNKNOWN to the existing LOCKED/UNCERTAIN/SEARCHING
+   payload without changing `src.mqtt_bridge`.
+
+### Simulation and evaluation (no hardware)
+
+`src/person_tracking/sim/` renders scripted people, walls and head turns, and derives realistic
+detector, YuNet and ArcFace behaviour from ground truth (partial boxes when occluded, faces vanishing
+as the head turns, similarity falling with yaw, a lookalike). The tracker never sees ground truth; both
+systems under test receive identical observations. Scenarios: `head_turn`, `long_turn`, `occlusion`,
+`long_occlusion`, `path_crossing`, `crossing_same_colour`, `leave_return`, `strangers_only`, `crowd`.
+`--save x.mp4` or `--sheet x.png` records an annotated run. Reports are written to `data/reports/`.
+
+Results (5 seeds, person detector every frame; the Part 2 style face lock is the baseline):
+
+| Scenario | Coverage 3-state | Coverage face lock | During face loss | Wrong-hold | Ghost lock (s) |
+| --- | --- | --- | --- | --- | --- |
+| head_turn (5 s away) | 100% | 63% | 100% vs 0% | 0% | 0 |
+| long_turn (12 s away) | 72% | 41% | 54% vs 0% | 0% | 0 |
+| occlusion (wall) | 93% | 76% | 71% vs 0% | 7% | 0 |
+| long_occlusion (9 s) | 46% | 35% | 16% vs 0% | 4% | 0 |
+| path_crossing | 100% | 86% | 97% vs 0% | 0% | 0 |
+| crossing_same_colour | 100% | 86% | 97% vs 0% | 0% | 0 |
+| leave_return | 98% | 92% | 70% vs 0% | 0% | 1.6 |
+| crowd (4 people) | 80% | 60% | 52% vs 1% | 0% | 0 |
+| strangers_only (4% lookalike false matches) | n/a | n/a | n/a | n/a | 0.3 (face lock 0.5) |
+
+With the target in view, no `CONFIRMED` frame pointed at the wrong person and there were no identity switches
+(the only false locks are the lookalike "ghost" seconds above, when the target is absent). Where the tracker
+is wrong it is almost entirely while `TEMPORARY` and `evidence: predicted` (the target hidden behind a wall
+and extrapolated), with lower confidence than correct frames, which is the intended behaviour. Wall-occlusion
+coverage depends on whether partial sliver detections occur, so treat single-scenario differences between
+runs (for example `--detect-every 4`) as noise, not tuning signal.
+
+Measured on a 20-thread Intel laptop CPU at 640x480 (`python -m src.person_tracking.benchmark`):
+YuNet about 18 ms, HOG about 5 ms (every third frame), tracker about 1 ms, **ArcFace R100 about 108 ms
+per face**. That gives roughly 33 FPS in the typical case versus about 8 FPS when ArcFace runs on
+every frame. A 1280x720 video without faces ran at about 51 FPS through the whole CLI.
+
+Limitations, stated plainly: the simulator's detectors are models of real ones, so the numbers show the tracking
+logic, not real-camera accuracy; tune `--half-life`, `--min-face` and the thresholds on your own footage.
+HOG rarely detects close-up webcam framing (the face-derived body is then used) and a stranger
+who also matches the target above the threshold is accepted, exactly as in Part 1. Colour cues cannot separate
+people in identical clothing, so the tracker withdraws confidence after such a crossing rather than guessing.
+There is no liveness or anti-spoofing check. No real-person video was evaluated here; no ONNX person model is bundled.
+
 ## Inspect individual stages
 
 ```sh
@@ -209,6 +307,7 @@ FaceX/
     harr_5pt.py          Landmark/alignment preview
     config.py           Project-relative paths
     workflow.py         CLI helpers and camera cleanup
+    person_tracking/    Part 3: whole-person tracker, three-state identity, centring, simulator
   tests/                Automated mathematical/storage tests
   book/                 Reference material directory
 ```
@@ -219,6 +318,7 @@ Run modules with `python -m src.<module>` from the project root, rather than `py
 
 ```sh
 python -m unittest discover -s tests -v
+python -m unittest tests.test_person_tracking -v   # Part 3 only; needs no camera or models
 ```
 
 Tests cover known-transform recovery, invalid landmarks/embeddings, database round-trips, replacement, model mismatches, unknown rejection, ambiguity, and camera cleanup. No camera is required. Two additional smoke tests run real model inference when weights are present and skip otherwise.
