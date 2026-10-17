@@ -39,7 +39,8 @@ def read_frame(cap):
     ok, frame = cap.read()
     if not ok or frame is None:
         raise RuntimeError("Camera stopped returning frames")
-    return frame
+    # Mirror the frame horizontally for natural selfie-style viewing
+    return cv2.flip(frame, 1)
 
 
 def exiting(window, key):
