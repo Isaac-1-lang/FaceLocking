@@ -27,14 +27,14 @@
 
 | scenario | mean ms | p95 ms | max ms | embedder calls/frame (three_state) | (face_lock) |
 |---|---|---|---|---|---|
-| head_turn | 0.54 | 0.75 | 1.2 | 0.08 | 1.63 |
-| long_turn | 0.62 | 1.25 | 2.5 | 0.07 | 1.39 |
-| occlusion | 0.48 | 0.80 | 1.5 | 0.08 | 1.53 |
-| long_occlusion | 0.35 | 0.68 | 2.0 | 0.06 | 1.30 |
-| path_crossing | 0.55 | 0.87 | 1.6 | 0.10 | 1.83 |
-| crossing_same_colour | 0.55 | 0.83 | 1.7 | 0.22 | 1.83 |
-| leave_return | 0.44 | 0.88 | 2.2 | 0.07 | 1.50 |
-| strangers_only | 0.56 | 1.01 | 2.3 | 0.19 | 1.82 |
-| crowd | 1.13 | 2.15 | 11.6 | 0.28 | 2.81 |
+| head_turn | 0.49 | 0.77 | 2.8 | 0.08 | 1.63 |
+| long_turn | 0.48 | 0.74 | 1.6 | 0.07 | 1.39 |
+| occlusion | 0.47 | 0.68 | 1.3 | 0.08 | 1.53 |
+| long_occlusion | 0.34 | 0.61 | 1.2 | 0.06 | 1.30 |
+| path_crossing | 0.57 | 0.73 | 46.6 | 0.10 | 1.83 |
+| crossing_same_colour | 0.64 | 1.03 | 2.7 | 0.22 | 1.83 |
+| leave_return | 0.46 | 0.78 | 1.4 | 0.07 | 1.50 |
+| strangers_only | 0.74 | 1.16 | 2.7 | 0.19 | 1.82 |
+| crowd | 1.76 | 3.18 | 15.9 | 0.28 | 2.81 |
 
 Definitions: *coverage* = fraction of frames (after first confirmation) where the target is present and the tracker points at it while CONFIRMED or TEMPORARY. *wrong-hold* = fraction of held frames pointing at someone else. *ghost s* = seconds holding a lock while the target is not in the scene. *precision* = fraction of frames in that state that point at the target.

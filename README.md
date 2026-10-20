@@ -172,22 +172,115 @@ python -m src.person_tracking.sim.evaluate --seeds 5               # scores vs g
 python -m src.person_tracking.benchmark                            # per-stage CPU timings
 ```
 
+### What is new compared with the Part 2 lock
+
+Part 2 (`src.face_tracking`) and Part 3 (`src.person_tracking`) both have states with similar
+names, but they answer different questions. Part 2 asks: *is the target's face in view and recognised
+right now?* Part 3 asks: *where is the target's body, and how sure are we it is still the same person?*
+
+| | Part 2 `face_tracking` | Part 3 `person_tracking` |
+| --- | --- | --- |
+| What is tracked | The face box | The whole body of every person, with the face attached to its body |
+| Needs a detected face to output a position | Yes, every frame | No, only to *gain* or *refresh* confidence |
+| Face disappears (head turn, hidden, looking down) | `LOST`: no box, no position, gives up after 24 frames | `TEMPORARY`: body still followed, position still output, confidence decays |
+| Face visible but not recognised | `UNCERTAIN` (up to 5 frames) | Weak negative evidence on that track; not a separate state |
+| Timing | Counted in frames (24 lost, 5 uncertain) | Seconds, so it behaves the same at any frame rate |
+| What a state carries | A label | A label plus a confidence number that decays |
+| Identity decision | A fresh ArcFace decision on each check | Evidence accumulates; one weak match cannot confirm |
+| Other people in view | Mostly ignored | Tracked too, so crossings can be detected and swaps refused |
+| ArcFace cost | Roughly every frame | About once a second for a held target |
+
+Old `UNCERTAIN` and new `TEMPORARY` are nearly opposites: `UNCERTAIN` means the face is visible but
+recognition is unsure, while `TEMPORARY` means the face is not visible at all but the body is still followed.
+Part 2 is unchanged and still works; Part 3 is a separate module that reuses its detector, recognizer and
+database.
+
 ### The three states
 
-| State | Meaning | How it is reached |
-| --- | --- | --- |
-| `CONFIRMED` | A face matched the target recently enough to still be trusted | Positive face evidence only |
-| `TEMPORARY` | Was confirmed, face no longer seen; body followed by motion/appearance while confidence decays | Only from `CONFIRMED`, by decay |
-| `UNKNOWN` | No trustworthy claim (never confirmed, ruled out, or decayed away): **no centring command is produced** | Decay below `--unknown`, a different person's face, or a suspected swap |
+| State | Meaning | How it is reached | Aim output |
+| --- | --- | --- | --- |
+| `CONFIRMED` | A face matched the target recently enough to still be trusted | Positive face evidence only | Full gain |
+| `TEMPORARY` | Was confirmed, face no longer seen; body followed by motion while confidence decays | Only from `CONFIRMED`, by decay | Reduced gain (0.35 to 1, in proportion to confidence) |
+| `UNKNOWN` | No trustworthy claim: never confirmed, ruled out, or decayed away | Decay below `--unknown`, a different person's face, or a suspected swap | **None** (no centring command) |
+
+```text
+UNKNOWN --(face match, enough evidence)--> CONFIRMED --(no face, decay below 0.50)--> TEMPORARY
+   ^                                           ^                                           |
+   |                                           +--------(new face match, back to 0.70)-----+
+   +-----------(decay below 0.20, other person's face, suspected swap)---------------------+
+```
 
 Confidence follows `c(t) = c0 * 0.5^(t / half_life)` between face observations
-(`--half-life`, default 3 s), measured in seconds so it is frame-rate independent. Decay is
-faster while the person is crossing another one (x2.5), coasting undetected (x1.5), or
+(`--half-life`, default 3 s), measured in seconds so it is frame-rate independent. With the defaults a
+fully confident lock stays `CONFIRMED` for about 3 s without a face, then `TEMPORARY`, then `UNKNOWN` after
+about 7 s. Decay is faster while the person is crossing another one (x2.5), coasting undetected (x1.5), or
 predicted to have left the image (x4). Hysteresis (`--confirm` 0.70, drop 0.50, `--unknown` 0.20)
-prevents flicker. A body match, however good, never raises confidence; only a face match does.
-A just-passing match (similarity near the 0.45 threshold) cannot confirm alone: a single match
-confirms only from about 0.57 similarity, otherwise two agreeing matches are needed. A face of a
-different enrolled person removes the lock after two strikes. Only one track can hold the target.
+prevents flicker.
+
+Rules that keep the states honest:
+
+- **Only a face can raise confidence.** Following a body, however well, never does.
+- **`TEMPORARY` can only be entered from `CONFIRMED`.** A track building up evidence from nothing stays
+  `UNKNOWN` until it crosses the confirm threshold.
+- **One weak match cannot confirm.** A single match confirms only from about 0.57 similarity (the
+  threshold is 0.45); otherwise two agreeing matches are needed.
+- **A different enrolled person's face** removes the lock after two strikes.
+- **Only one track can hold the target** at a time; a new face match moves the lock rather than duplicating it.
+
+### How the body is related to the face
+
+No body is ever stored or recognised. The database holds face embeddings only, exactly as in Part 1.
+The tracker works like this:
+
+1. ArcFace recognises a face as the target (the same match as Part 1).
+2. The face is mapped to a body by position: the face must sit where a head should be inside one body box.
+3. That body's *track*, which lives only in memory while the program runs, is now labelled "target".
+4. From then on the track is followed by motion (the Kalman filter below). The identity is never re-read
+   from the body; it is a label carried from the last face match and decays until the next one.
+
+The face-to-body score (`face_body.py`) is a Gaussian prior around the expected head position, which is
+centred horizontally and about 8.5% of the body height below the top of the box. It is loose
+horizontally (sigma 20% of body width, so turned shoulders still fit) and tight vertically (sigma 8% of body
+height). It is combined with a size check (face height 5% to 30% of body height). A face whose centre is
+outside the body horizontally or below the upper half of the body is rejected outright. All faces and bodies
+are then matched together with the Hungarian algorithm, so one face goes to exactly one body. When a face fits
+two overlapping bodies almost equally well (runner-up within 60% of the winner) it is flagged ambiguous and
+**not used as identity evidence**, which stops a crossing from handing the target label to the wrong person.
+
+The reverse also works: when the body detector finds nothing (common for close-up webcam framing), a body
+box is built from the face, with a body height of the face height divided by 0.135. The tracker treats it as a
+noisy measurement.
+
+A small colour summary of each torso (72-bin HSV histogram) is learned live and kept in memory only. It is used
+only as a soft association cue and to detect swaps after two people cross. It cannot say who someone is
+and never confirms anyone. Consequently, if a track is lost completely (the person leaves, a long occlusion, or a
+restart), that body cannot be recognised again: a new face match is required.
+
+### The Kalman filter
+
+Each body has its own constant-velocity Kalman filter (`kalman.py`, plain NumPy, about microseconds per update).
+It exists so the box keeps moving sensibly between detector runs and when the person is hidden.
+
+- **State:** `[cx, cy, w, h, vx, vy]`, the box centre, its size and the centre velocity.
+- **Predict (every frame):** the box moves by its velocity times the elapsed time. Uncertainty grows with
+  time, and the noise is scaled by the body size so a near and a far person behave the same.
+- **Update (when a detection is matched):** the prediction and the detection are blended by their uncertainties,
+  which also teaches the filter the person's speed.
+- **Coasting (nothing measured):** the velocity is damped (rate 0.35 per second) so the box slows down instead
+  of flying off during a long occlusion, while its uncertainty keeps growing. The tracker uses that
+  uncertainty and the time without a measurement to report `predicted` evidence and to decay confidence faster.
+- **Skipped detector frames:** the body detector runs every few frames to save CPU, and the Kalman prediction
+  carries the box through the frames in between.
+- **Outlier handling:** a measurement far from the prediction (a false positive or a wrong box) is down-weighted
+  (chi-square 95%) or ignored (99.9%) instead of dragging the track.
+- **Truncated boxes:** when an occluder hides part of a person, the visible sliver is not used directly, since
+  its centre would bias position and speed. The tracker takes the full-size box nearest to the prediction that
+  still contains the sliver.
+- **Association:** each frame, tracks and detections are matched with the Hungarian algorithm using overlap,
+  centre distance and clothing colour, with a gate that widens the longer a track has been unseen.
+
+Practical effect: a person walking behind a wall keeps a moving `TEMPORARY` box at roughly the right place,
+though the longer they stay hidden the less accurate the prediction (and the confidence) becomes.
 
 ### Pipeline
 
