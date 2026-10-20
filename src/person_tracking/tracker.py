@@ -7,7 +7,7 @@ detector was skipped to save CPU), face observations, and optionally a
 per-frame budget. Everything else here is NumPy on a handful of boxes.
 """
 from dataclasses import dataclass, field, replace
-
+ 
 import numpy as np
 
 from . import appearance
