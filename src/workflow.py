@@ -9,7 +9,7 @@ from .landmarks import FaceDetector
 
 def parser(description):
     result = argparse.ArgumentParser(description=description)
-    result.add_argument("--camera", type=int, default=1)
+    result.add_argument("--camera", type=int, default=0)
     result.add_argument("--detector", default=str(DETECTOR))
     result.add_argument("--model", default=str(EMBEDDER))
     result.add_argument("--db", default=str(DATABASE))
@@ -39,7 +39,8 @@ def read_frame(cap):
     ok, frame = cap.read()
     if not ok or frame is None:
         raise RuntimeError("Camera stopped returning frames")
-    return frame
+    # Mirror the frame horizontally for natural selfie-style viewing
+    return cv2.flip(frame, 1)
 
 
 def exiting(window, key):
