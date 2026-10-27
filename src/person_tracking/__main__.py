@@ -5,6 +5,9 @@
 
 Needs the Part 1 enrollment database and models; runs on the CPU only.
 """
+import utils.http_session
+import utils.transport
+import utils.session
 import time
 from contextlib import closing, nullcontext
 
